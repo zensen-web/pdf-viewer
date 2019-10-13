@@ -14,6 +14,7 @@
   },
   "scripts": {
     "install:clear": "rm -rf node_modules",
+    "postinstall": "node copy-css.js",
     "storybook": "start-storybook -p 9001",
     "storybook:build": "build-storybook -o _site -s storybook-static",
     "site:build": "npm run storybook:build",

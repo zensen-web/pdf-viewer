@@ -1,8 +1,18 @@
 import pdfjs from 'pdfjs-dist/build/pdf'
-
 import { LitElement, html, css } from 'lit-element'
 
+import { STYLES_PDF } from './pdf_viewer.css.js'
+
+import {
+  PDFPageView,
+  DefaultTextLayerFactory,
+  DefaultAnnotationLayerFactory,
+} from 'pdfjs-dist/web/pdf_viewer'
+
 pdfjs.GlobalWorkerOptions.workerSrc = '//mozilla.github.io/pdf.js/build/pdf.worker.js'
+
+const ID_SCROLL = 'scroll'
+const ID_CONTENT = 'content'
 
 const ITEMS_ZOOM = [
   { label: '50%', value: 0.5 },
@@ -15,13 +25,13 @@ const ITEMS_ZOOM = [
 ]
 
 const clamp = (num, min, max) => (num <= min ? min : num >= max ? max : num)
-const range = (size, start) => new Array(size).fill(0).map((_, i) => i + start)
 
 class ZenPdfViewer extends LitElement {
   static get properties () {
     return {
+      __pageNum: Number,
       __document: Object,
-      __pageRange: Array,
+      __pages: Array,
 
       pageNum: Number,
       zoomIndex: Number,
@@ -30,7 +40,9 @@ class ZenPdfViewer extends LitElement {
   }
 
   static get styles () {
-    return css`
+    return [
+      STYLES_PDF,
+      css`
       *,
       *::before,
       *::after {
@@ -51,18 +63,22 @@ class ZenPdfViewer extends LitElement {
       }
 
       .scroll {
-        display: flex;
+        display: block;
         overflow: auto;
         min-width: 0;
         min-height: 0;
         flex: 1 0 0;
+      }
+
+      .content {
+        display: flex;
+        width: 100%;
         flex-flow: column nowrap;
         align-items: center;
       }
 
-      .canvas {
+      .page {
         margin-top: 2rem;
-        background-color: #FFF;
         box-shadow: 0 0 8px 2px rgba(0, 0, 0, 0.6);
       }
 
@@ -131,7 +147,7 @@ class ZenPdfViewer extends LitElement {
         color: #FFF;
         font-size: 1.4rem;
       }
-    `
+    `]
   }
 
   constructor () {
@@ -141,93 +157,134 @@ class ZenPdfViewer extends LitElement {
   }
 
   __initState () {
+    this.__pageNum = 1
+    this.__scrollEl = null
+    this.__contentEl = null
     this.__document = null
-    this.__pageRange = []
-    this.__viewports = []
+    this.__debounce = null
+    this.__pages = []
+    this.__renderedPageIndices = []
+
 
     this.pageNum = 1
     this.zoomIndex = 2
     this.src = ''
 
-    this.onPageChange = () => {}
+    this.onManualPageChange = () => {}
     this.onZoomChange = () => {}
   }
 
   __initHandlers () {
     this.__handlers = {
-      pageUp: () => this.onPageChange(this.pageNum - 1, true),
-      pageDown: () => this.onPageChange(this.pageNum + 1, true),
+      pageUp: () => this.onManualPageChange(this.__pageNum - 1, true),
+      pageDown: () => this.onManualPageChange(this.__pageNum + 1, true),
       goToPage: e => {
         const v = Number(e.target.value)
-        const pageNum = clamp(v, 1, this.getPageCount())
-        this.onPageChange(pageNum)
+        const pageNum = clamp(v, 1, this.__pages.length)
+        this.onManualPageChange(pageNum)
       },
       zoom: e => this.onZoomChange(Number(e.target.value)),
       magnify: () => this.onZoomChange(this.zoomIndex + 1),
       minify: () => this.onZoomChange(this.zoomIndex - 1),
       scroll: e => {
-        let offset = 0
-        const halfHeight = e.target.clientHeight / 2
+        let offset = e.target.scrollTop
 
-        const index = this.__viewports.findIndex(viewport => {
-          offset += viewport.height + 20
-          return offset - e.target.scrollTop >= halfHeight
+        const index = this.__pages.findIndex(page => {
+          if (offset <= (page.view.height / 2) + 20) {
+            return true
+          }
+
+          offset -= page.view.height + 20
+          return false
         })
 
-        if (this.pageNum !== index + 1) {
-          this.onPageChange(index + 1)
+        if (this.__pageNum !== index + 1) {
+          this.__pageNum = index + 1
+
+          clearTimeout(this.__debounce)
+          this.__debounce = setTimeout(this.__handlers.display, 1000)
         }
+      },
+      display: () => {
+        this.__debounce = null
+        this.__displayPages()
       },
     }
   }
 
   async __loadDocument () {
-    this.__pageRange = []
     this.__document = await pdfjs.getDocument(this.src).promise
-    this.__pageRange = range(this.__document.numPages, 1)
+    this.__pages = new Array(this.__document.numPages).fill({})
+
+    for (let i = 0; i < this.__document.numPages; ++i) {
+      this.__pages[i] = await this.__loadPage(i + 1)
+    }
+
+    this.__scrollToPage(this.pageNum)
+    this.__displayPages()
   }
 
-  __loadPages () {
-    this.__viewports = new Array(this.__pageRange.length).fill({
-      width: 0,
-      height: 0,
+  async __loadPage (pageNum) {
+    const page = await this.__document.getPage(pageNum)
+    const viewport = page.getViewport({ scale: this.getZoom() })
+    const view = new PDFPageView({
+      id: pageNum,
+      container: this.__contentEl,
+      scale: this.getZoom(),
+      defaultViewport: viewport,
+      textLayerFactory: new DefaultTextLayerFactory(),
+      annotationLayerFactory: new DefaultAnnotationLayerFactory(),
     })
 
-    return Promise.all(this.__pageRange.map(async pageNum => {
-      const page = await this.__document.getPage(pageNum)
+    view.setPdfPage(page)
 
-      const viewport = page.getViewport({ scale: this.getZoom() })
-      const canvasEl = this.shadowRoot.getElementById(`canvas-${pageNum}`)
-      const canvasContext = canvasEl.getContext('2d')
-      const renderContext = {
-        viewport,
-        canvasContext,
+    return {
+      ref: page,
+      view,
+    }
+  }
+
+  __displayPages () {
+    const pageIndex = this.__pageNum - 1
+    const minPageIndex = Math.max(0, pageIndex - 5)
+    const maxPageIndex = Math.min(pageIndex + 5, this.__pages.length + 1)
+    const diff = maxPageIndex - minPageIndex
+    const range = new Array(diff)
+      .fill(0)
+      .map((_, index) => minPageIndex + index)
+
+    this.__renderedPageIndices.forEach(pageIndex => {
+      if (range.indexOf(pageIndex) === -1) {
+        this.__pages[pageIndex].view.reset()
       }
+    })
 
-      canvasEl.width = viewport.width
-      canvasEl.height = viewport.height
-      canvasEl.style.width = `${viewport.width}px`
-      canvasEl.style.height = `${viewport.height}px`
-
-      canvasContext.save()
-      canvasContext.clearRect(0, 0, viewport.width, viewport.height)
-      canvasContext.restore()
-
-      this.__viewports[pageNum - 1] = {
-        width: viewport.width,
-        height: viewport.height,
+    range.forEach(pageIndex => {
+      if (this.__renderedPageIndices.indexOf(pageIndex) === -1) {
+        this.__pages[pageIndex].view.draw()
       }
+    })
 
-      requestAnimationFrame(() => page.render(renderContext))
-    }))
+    this.__renderedPageIndices = range
+  }
+
+  __scrollToPage (pageNum) {
+    if (this.__pages.length) {
+      this.__scrollEl.scrollTop = this.__pages
+        .slice(0, pageNum - 1)
+        .reduce((accum, page) => accum + page.view.height + 20, 0)
+
+      this.__pageNum = pageNum
+    }
+  }
+
+
+  __updatePageScale () {
+    this.__pages.forEach(page => page.view.update(this.getZoom(), 0))
   }
 
   canPageDown () {
-    return this.pageNum < this.getPageCount()
-  }
-
-  getPageCount () {
-    return this.__pageRange.length
+    return this.__pageNum < this.__pages.length
   }
 
   getZoom () {
@@ -235,17 +292,27 @@ class ZenPdfViewer extends LitElement {
   }
 
   update (changedProps) {
-    if (changedProps.has('src')) {
-      this.__loadDocument()
+    if (changedProps.has('pageNum') && this.__scrollEl) {
+      this.__scrollToPage(this.pageNum)
+    }
+
+    if (changedProps.has('zoomIndex')) {
+      this.__updatePageScale()
     }
 
     super.update(changedProps)
   }
 
   updated (changedProps) {
-    if (changedProps.has('__pageRange')) {
-      this.__loadPages()
+    if (changedProps.has('src')) {
+      this.__loadDocument()
     }
+  }
+
+  firstUpdated () {
+    this.__scrollEl = this.shadowRoot.getElementById(ID_SCROLL)
+    this.__contentEl = this.shadowRoot.getElementById(ID_CONTENT)
+    this.__scrollToPage(this.pageNum)
   }
 
   renderToolbar () {
@@ -253,7 +320,7 @@ class ZenPdfViewer extends LitElement {
       <div class="toolbar">
         <button
           class="button button-page"
-          .disabled="${this.pageNum < 2}"
+          .disabled="${this.__pageNum < 2}"
           @click="${this.__handlers.pageUp}"
         >Page Up</button>
 
@@ -266,13 +333,13 @@ class ZenPdfViewer extends LitElement {
         <input
           class="input"
           type="number"
-          .max="${this.getPageCount()}"
-          .value="${this.pageNum}"
+          .max="${this.__pages.length}"
+          .value="${this.__pageNum}"
           @change="${this.__handlers.goToPage}"
         >
 
         <span class="text-toolbar">
-          ${this.getPageCount() ? html`of ${this.getPageCount()}` : ''}
+          ${this.__pages.length ? html`of ${this.__pages.length}` : ''}
         </span>
 
         <button
@@ -301,13 +368,13 @@ class ZenPdfViewer extends LitElement {
 
   renderContent () {
     return html`
-      <div class="scroll" @scroll="${this.__handlers.scroll}">
-        ${this.__pageRange.map(pageNum => html`
-          <canvas
-            id="canvas-${pageNum}"
-            class="canvas"
-          ></canvas>
-        `)}
+      <div
+        id="${ID_SCROLL}"
+        class="scroll"
+        @scroll="${this.__handlers.scroll}"
+      >
+        <div id="${ID_CONTENT}" class="content pdfViewer">
+        </div>
       </div>
     `
   }
