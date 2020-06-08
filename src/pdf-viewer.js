@@ -278,7 +278,6 @@ class ZenPdfViewer extends LitElement {
     }
   }
 
-
   __updatePageScale () {
     this.__pages.forEach(page => page.view.update(this.getZoom(), 0))
   }

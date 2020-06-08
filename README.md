@@ -1,4 +1,4 @@
-# zensen-pdf-viewer
+# @zen-web-components/pdf-viewer
 
 A PDF viewer component for LitElement.
 
@@ -14,13 +14,13 @@ A PDF viewer component for LitElement.
 Using `npm`:
 
 ```
-$ npm install @zensen/pdf-viewer
+$ npm install @zen-web-components/pdf-viewer
 ```
 
 Using `yarn`:
 
 ```
-$ yarn add @zensen/pdf-viewer
+$ yarn add @zen-web-components/pdf-viewer
 ```
 
 ## API
