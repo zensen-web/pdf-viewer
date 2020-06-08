@@ -1,9 +1,9 @@
 import '../src/pdf-viewer'
 
-import { sinon, expect, genSuite } from '@zen-web-components/unit-test-helper'
+import { _sinon, expect, genSuite } from '@zen-web-components/unit-test-helper'
 
 genSuite('zen-pdf-viewer', false, {
-  onStart: meta => {
+  onStart: _meta => {
   },
 }, meta => {
   context('when...', () => {
