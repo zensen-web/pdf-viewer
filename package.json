@@ -39,7 +39,7 @@
     "@zen-web-components/eslint-config": "^1.0.3",
     "@zen-web-components/unit-test-helper": "^1.0.11",
     "eslint": "^7.2.0",
-    "karma": "^4.2.0",
+    "karma": "^6.3.14",
     "lit-element": "^2.2.1",
     "lit-html": "^1.1.1",
     "mocha": "^6.1.3"
